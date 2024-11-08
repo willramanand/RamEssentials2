@@ -1,0 +1,18 @@
+name: RamEssentials2
+version: '1.0.0-SNAPSHOT'
+main: dev.willram.ramEssentials2.RamEssentials2
+api-version: '1.21'
+dependencies:
+  server:
+    # Add a required "RequiredPlugin" dependency, which will load AFTER your plugin.
+    RamCore:
+      load: BEFORE
+      required: true
+      # This means that your plugin will not have access to their classpath
+      join-classpath: true
+    # Add a required "RequiredPlugin" dependency, which will load AFTER your plugin.
+    Vault:
+      load: BEFORE
+      required: false
+      # This means that your plugin will not have access to their classpath
+      join-classpath: true
