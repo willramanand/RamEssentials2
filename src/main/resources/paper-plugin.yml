@@ -1,18 +1,11 @@
 name: RamEssentials2
-version: '1.0.0-SNAPSHOT'
+version: '${project.version}'
 main: dev.willram.ramEssentials2.RamEssentials2
-api-version: '1.21'
+api-version: '26.1.2'
+folia-supported: true
 dependencies:
   server:
-    # Add a required "RequiredPlugin" dependency, which will load AFTER your plugin.
     RamCore:
       load: BEFORE
       required: true
-      # This means that your plugin will not have access to their classpath
-      join-classpath: true
-    # Add a required "RequiredPlugin" dependency, which will load AFTER your plugin.
-    Vault:
-      load: BEFORE
-      required: false
-      # This means that your plugin will not have access to their classpath
       join-classpath: true

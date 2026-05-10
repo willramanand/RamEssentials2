@@ -13,9 +13,11 @@ class AccountData : DataItem() {
 
     fun deposit(amount: Double) {
         this.capital += amount
+        this.markDirty()
     }
 
     fun withdraw(amount: Double) {
         this.capital -= amount
+        this.markDirty()
     }
 }

@@ -1,24 +1,24 @@
 package dev.willram.ramEssentials2
 
-import dev.willram.ramEssentials2.commands.*
-import dev.willram.ramEssentials2.commands.nickname.NicknameRootCommand
+import dev.willram.ramEssentials2.commands.EssentialsCommandModule
 import dev.willram.ramEssentials2.config.EssentialsConfig
 import dev.willram.ramEssentials2.data.AccountDataRepository
+import dev.willram.ramEssentials2.data.LegacyDataMigrator
+import dev.willram.ramEssentials2.data.MigrationReport
 import dev.willram.ramEssentials2.data.PlayerDataRepository
+import dev.willram.ramEssentials2.data.WarpDataRepository
+import dev.willram.ramEssentials2.economy.EconomyTransactionLogger
 import dev.willram.ramEssentials2.economy.RamEssentials2Economy
 import dev.willram.ramEssentials2.events.Listeners
 import dev.willram.ramcore.RamPlugin
-import dev.willram.ramcore.config.Configs
-import dev.willram.ramcore.configurate.hocon.HoconConfigurationLoader
+import dev.willram.ramcore.commands.RamCommands
 import dev.willram.ramcore.scheduler.Schedulers
 import dev.willram.ramcore.scheduler.Task
-import io.leangen.geantyref.TypeToken
+import dev.willram.ramcore.scheduler.TaskContext
 import io.papermc.paper.command.brigadier.Commands
 import net.milkbowl.vault.economy.Economy
-import org.bukkit.Location
 import org.bukkit.plugin.ServicePriority
-import java.nio.file.Path
-import java.util.*
+import java.nio.file.Files
 
 
 class RamEssentials2 : RamPlugin() {
@@ -27,7 +27,10 @@ class RamEssentials2 : RamPlugin() {
     lateinit var conf: EssentialsConfig
     lateinit var players: PlayerDataRepository
     lateinit var accounts: AccountDataRepository
-    var warps: MutableMap<String, Location> = HashMap()
+    lateinit var warps: WarpDataRepository
+    lateinit var transactions: EconomyTransactionLogger
+    var migrationStatus: MigrationReport = MigrationReport(markerExisted = true)
+    var validationWarnings: List<String> = emptyList()
 
     companion object {
         private lateinit var i: RamEssentials2;
@@ -43,7 +46,6 @@ class RamEssentials2 : RamPlugin() {
 
     override fun enable() {
         this.loadConf()
-        this.loadWarps()
 
         players = PlayerDataRepository(this)
         players.setup()
@@ -51,23 +53,22 @@ class RamEssentials2 : RamPlugin() {
         accounts = AccountDataRepository(this)
         accounts.setup()
 
-        Listeners.register()
+        warps = WarpDataRepository(this)
+        warps.setup()
 
-        this.autoSaveTask = Schedulers.async().runRepeating({ _: Task ->
-            this.saveConf()
-            this.saveWarps()
-            players.saveAll()
-            accounts.saveAll()
-        }, 6000L, 6000L)
+        transactions = EconomyTransactionLogger(this)
+        migrationStatus = LegacyDataMigrator(this).migrateIfNeeded()
+        refreshValidationWarnings()
+
+        Listeners.register(this)
+
+        this.autoSaveTask = Schedulers.runTimer(TaskContext.async(), Runnable {
+            this.saveEssentials()
+        }, 6000L, 6000L, this)
     }
 
     override fun disable() {
-        this.autoSaveTask.stop()
-
-        this.saveConf()
-        this.saveWarps()
-        players.saveAll()
-        accounts.saveAll()
+        this.saveEssentials()
     }
 
     override fun load() {
@@ -86,65 +87,59 @@ class RamEssentials2 : RamPlugin() {
 
     @Suppress("UnstableApiUsage")
     override fun registerCommands(commands: Commands) {
-        commands.register("back", "Return a previous location", listOf(), BackCommand(this))
-        commands.register("broadcast", "Broadcast a message to the whole server", listOf(), BroadcastCommand())
-        commands.register("balance", "View a players balance", listOf("bal", "money", "wallet"), BalanceCommand(this))
-        commands.register("god", "Set player god mode status", listOf(), GodCommand(this))
-        commands.register("donotdisturb", "Toggle your do not disturb status.", listOf("dnd"), DoNotDisturbCommand(this))
-        commands.register("home", "Teleport to player home", listOf(), HomeCommand(this))
-        commands.register("delhome", "Delete a player home", listOf("homedel"), DelHomeCommand(this))
-        commands.register("sethome", "Set a new player home", listOf("homeset"), SetHomeCommand(this))
-        commands.register("spawn", "Teleport to server or world spawn", listOf(), SpawnCommand(this))
-        commands.register("setspawn", "Set the spawn of the server or a world", listOf(), SetSpawnCommand(this))
-        commands.register("gamemode", "Set the gamemode of a player.", listOf("gm"), GamemodeCommand())
-        commands.register("nickname", "Set your nickname", listOf("nick"), NicknameRootCommand(this))
-        commands.register("message", "Send message to another player.", listOf("msg"), MessageCommand(this))
-        commands.register("reply", "Reply to a player who recently sent you a message.", listOf("r"), ReplyCommand(this))
-        commands.register("ignore", "Ignore another player.", listOf(), IgnoreCommand(this))
-        commands.register("world", "Teleport to spawn of another world.", listOf(), WorldCommand())
-        commands.register("warp", "Teleport to a warp.", listOf(), WarpCommand(this))
-        commands.register("delwarp", "Delete a warp.", listOf("warpdel"), DelWarpCommand(this))
-        commands.register("setwarp", "Set a warp.", listOf("warpset"), SetWarpCommand(this))
+        RamCommands.register(commands, EssentialsCommandModule(this))
+    }
+
+    fun reloadEssentials() {
+        this.loadConf()
+        if (::warps.isInitialized) {
+            warps.setup()
+        }
+        refreshValidationWarnings()
+    }
+
+    fun saveEssentials() {
+        this.saveConf()
+        if (::players.isInitialized) {
+            players.saveDirty()
+        }
+        if (::accounts.isInitialized) {
+            accounts.saveDirty()
+        }
+        if (::warps.isInitialized) {
+            warps.saveDirty()
+        }
+    }
+
+    fun transactionsReady(): Boolean {
+        return ::transactions.isInitialized
+    }
+
+    fun refreshValidationWarnings() {
+        validationWarnings = buildList {
+            if (::conf.isInitialized) {
+                addAll(conf.validateRuntime())
+            }
+            if (::warps.isInitialized) {
+                addAll(warps.validateItems())
+            }
+        }
     }
 
     private fun loadConf() {
-        val loader = HoconConfigurationLoader.builder()
-            .path(Path.of("${this.dataFolder}/config.conf"))
-            .defaultOptions {opts -> opts.serializers {build -> build.registerAll(Configs.typeSerializers())}}
-            .build()
-        val node = loader.load(); // Load from file
-        this.conf = node.get(EssentialsConfig::class.java)!!
-        loader.save(node)
+        Files.createDirectories(this.dataFolder.toPath())
+        val defaultSpawn = server.worlds.first().spawnLocation
+        if (::conf.isInitialized) {
+            conf.reload()
+        } else {
+            conf = EssentialsConfig(this.dataFolder.toPath().resolve("config.yml"), defaultSpawn)
+        }
     }
 
     private fun saveConf() {
-        val loader = HoconConfigurationLoader.builder()
-            .path(Path.of("${this.dataFolder}/config.conf"))
-            .defaultOptions {opts -> opts.serializers {build -> build.registerAll(Configs.typeSerializers())}}
-            .build()
-        val node = loader.load(); // Load from file
-        node.set(EssentialsConfig::class.java, conf)
-        loader.save(node)
-    }
-
-    private fun loadWarps() {
-        val loader = HoconConfigurationLoader.builder()
-            .path(Path.of("${this.dataFolder}/warps.conf"))
-            .defaultOptions {opts -> opts.serializers {build -> build.registerAll(Configs.typeSerializers())}}
-            .build()
-        val node = loader.load(); // Load from file
-        this.warps = node.get(object : TypeToken<MutableMap<String, Location>>() {}.type) as MutableMap<String, Location>
-        loader.save(node)
-    }
-
-    private fun saveWarps() {
-        val loader = HoconConfigurationLoader.builder()
-            .path(Path.of("${this.dataFolder}/warps.conf"))
-            .defaultOptions {opts -> opts.serializers {build -> build.registerAll(Configs.typeSerializers())}}
-            .build()
-        val node = loader.load(); // Load from file
-        node.set(object : TypeToken<MutableMap<String, Location>>() {}.type, warps)
-        loader.save(node)
+        if (::conf.isInitialized) {
+            conf.save()
+        }
     }
 
 }

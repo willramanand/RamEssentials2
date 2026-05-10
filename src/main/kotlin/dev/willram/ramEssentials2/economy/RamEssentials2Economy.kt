@@ -61,11 +61,11 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
     override fun getBalance(playerName: String): Double {
         val id = getIdFromName(playerName) ?: return 0.0
 
-        return plugin.accounts.get(id).capital
+        return plugin.accounts.get(id)?.capital ?: 0.0
     }
 
     override fun getBalance(player: OfflinePlayer): Double {
-        return plugin.accounts.get(player.uniqueId).capital
+        return plugin.accounts.get(player.uniqueId)?.capital ?: 0.0
     }
 
     @Deprecated("")
@@ -80,11 +80,11 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
     @Deprecated("")
     override fun has(playerName: String, amount: Double): Boolean {
         val id = getIdFromName(playerName) ?: return false
-        return plugin.accounts.get(id).has(amount)
+        return plugin.accounts.get(id)?.has(amount) ?: false
     }
 
     override fun has(player: OfflinePlayer, amount: Double): Boolean {
-        return plugin.accounts.get(player.uniqueId).has(amount)
+        return plugin.accounts.get(player.uniqueId)?.has(amount) ?: false
     }
 
     @Deprecated("")
@@ -108,11 +108,17 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
             return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have an account!")
         }
 
-        if (!plugin.accounts.get(id).has(amount)) {
+        val account = plugin.accounts.get(id)
+            ?: return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have an account!")
+
+        if (!account.has(amount)) {
             return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have this amount of capital!")
         }
 
-        plugin.accounts.get(id).withdraw(amount)
+        account.withdraw(amount)
+        if (plugin.transactionsReady()) {
+            plugin.transactions.log("vault-withdraw", null, id, amount, account.capital, playerName)
+        }
         return EconomyResponse(amount, getBalance(playerName), EconomyResponse.ResponseType.SUCCESS, null)
     }
 
@@ -125,11 +131,17 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
             return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have an account!")
         }
 
-        if (!plugin.accounts[player.uniqueId].has(amount)) {
+        val account = plugin.accounts.get(player.uniqueId)
+            ?: return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have an account!")
+
+        if (!account.has(amount)) {
             return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have this amount of capital!")
         }
 
-        plugin.accounts[player.uniqueId].withdraw(amount)
+        account.withdraw(amount)
+        if (plugin.transactionsReady()) {
+            plugin.transactions.log("vault-withdraw", null, player.uniqueId, amount, account.capital, player.name ?: "")
+        }
         return EconomyResponse(amount, getBalance(player), EconomyResponse.ResponseType.SUCCESS, null)
     }
 
@@ -155,7 +167,13 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
         }
 
 
-        plugin.accounts[id].deposit(amount)
+        val account = plugin.accounts.get(id)
+            ?: return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have an account!")
+
+        account.deposit(amount)
+        if (plugin.transactionsReady()) {
+            plugin.transactions.log("vault-deposit", null, id, amount, account.capital, playerName)
+        }
         return EconomyResponse(amount, getBalance(playerName), EconomyResponse.ResponseType.SUCCESS, null)
     }
 
@@ -168,7 +186,13 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
             return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have an account!")
         }
 
-        plugin.accounts[player.uniqueId].deposit(amount)
+        val account = plugin.accounts.get(player.uniqueId)
+            ?: return EconomyResponse(0.0, 0.0, EconomyResponse.ResponseType.FAILURE, "Player does not have an account!")
+
+        account.deposit(amount)
+        if (plugin.transactionsReady()) {
+            plugin.transactions.log("vault-deposit", null, player.uniqueId, amount, account.capital, player.name ?: "")
+        }
         return EconomyResponse(amount, getBalance(player), EconomyResponse.ResponseType.SUCCESS, null)
     }
 
@@ -295,7 +319,9 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
 
         val id = getIdFromName(playerName) ?: return false
 
-        plugin.accounts.add(id, AccountData())
+        val account = AccountData()
+        account.playerName = playerName
+        plugin.accounts.add(id, account)
         return true
     }
 
@@ -304,7 +330,9 @@ class RamEssentials2Economy(private val plugin: RamEssentials2) : Economy {
             return false
         }
 
-        plugin.accounts.add(player.uniqueId, AccountData())
+        val account = AccountData()
+        account.playerName = player.name ?: player.uniqueId.toString()
+        plugin.accounts.add(player.uniqueId, account)
         return true
     }
 

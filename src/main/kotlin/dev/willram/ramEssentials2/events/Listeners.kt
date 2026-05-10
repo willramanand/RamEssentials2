@@ -13,12 +13,13 @@ import org.bukkit.event.EventPriority
 import org.bukkit.event.entity.EntityDamageEvent
 import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.player.PlayerMoveEvent
+import org.bukkit.event.player.PlayerQuitEvent
 
 class Listeners {
 
     companion object {
-        fun register() {
-            Events.subscribe(AsyncChatEvent::class.java, EventPriority.HIGHEST)
+        fun register(plugin: RamEssentials2) {
+            plugin.bind(Events.subscribe(AsyncChatEvent::class.java, EventPriority.HIGHEST)
                 .handler { e ->
                     e.renderer { source, sourceDisplayName, message, viewer ->
                         MiniMessage.miniMessage()
@@ -26,61 +27,81 @@ class Listeners {
                                 Placeholder.component("playername", sourceDisplayName),
                                 Placeholder.component("message", message))
                     }
-                }
+                })
 
-            Events.subscribe(EntityDamageEvent::class.java, EventPriority.HIGHEST)
+            plugin.bind(Events.subscribe(EntityDamageEvent::class.java, EventPriority.HIGHEST)
                 .handler { e ->
                     if (e.entity !is Player) return@handler
                     val data = RamEssentials2.get().players.get((e.entity as Player).uniqueId)
-                    if (!data.godMode) return@handler
+                    if (data == null || !data.godMode) return@handler
                     e.isCancelled = true
-                }
+                })
 
-            Events.subscribe(PlayerDeathEvent::class.java, EventPriority.HIGH)
+            plugin.bind(Events.subscribe(PlayerDeathEvent::class.java, EventPriority.HIGH)
                 .handler { e ->
-                    if (e.isCancelled) return@handler
-                    val data = RamEssentials2.get().players.get(e.player.uniqueId)
-                    data.lastLocation = e.player.location
-
+                    val data = RamEssentials2.get().players.require(e.player.uniqueId)
+                    data.pushBackLocation(e.player.location, RamEssentials2.get().conf.backStackSize)
 
                     val basePercentage = RamEssentials2.get().conf.percentLostOnDeath
-                    val account = RamEssentials2.get().accounts.get(e.player.uniqueId)
+                    val account = RamEssentials2.get().accounts.require(e.player.uniqueId)
                     val percentage = basePercentage / 100.0
                     val subtractAmount = account.capital * percentage
-                    e.player.sendMessage(subtractAmount.toString())
                     account.withdraw(subtractAmount)
+                    account.markDirty()
+                    if (RamEssentials2.get().transactionsReady()) {
+                        RamEssentials2.get().transactions.log("death-loss", e.player.uniqueId, null, subtractAmount, account.capital)
+                    }
 
                     if (e.entity.killer == null) {
-                        e.player.sendRichMessage("<yellow>You have lost <light_purple>$basePercentage% <yellow>of your net worth!");
+                        e.player.sendRichMessage(RamEssentials2.get().conf.message("death-loss", mapOf("percent" to basePercentage.toString())))
                         return@handler
                     }
 
                     val killer = e.entity.killer
                     if (killer !is Player) return@handler
-                    val other = RamEssentials2.get().accounts.get(killer.uniqueId)
+                    val other = RamEssentials2.get().accounts.require(killer.uniqueId)
                     other.deposit(subtractAmount)
-                    e.player.sendRichMessage("<yellow>You have been robbed of <light_purple>${Formatter.formatMoney(subtractAmount)} <yellow>by <light_purple>${killer.name}<yellow>!");
-                    Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<light_purple>${e.player.name} <yellow>has been robbed!"))
-                }
+                    other.markDirty()
+                    if (RamEssentials2.get().transactionsReady()) {
+                        RamEssentials2.get().transactions.log("death-robbery", e.player.uniqueId, killer.uniqueId, subtractAmount, other.capital)
+                    }
+                    e.player.sendRichMessage(
+                        RamEssentials2.get().conf.message(
+                            "death-robbed",
+                            mapOf("amount" to Formatter.formatMoney(subtractAmount), "player" to killer.name)
+                        )
+                    )
+                    Bukkit.broadcast(MiniMessage.miniMessage().deserialize(
+                        RamEssentials2.get().conf.message("death-robbery-broadcast", mapOf("player" to e.player.name))
+                    ))
+                })
 
-            Events.subscribe(PlayerMoveEvent::class.java, EventPriority.HIGH)
+            plugin.bind(Events.subscribe(PlayerMoveEvent::class.java, EventPriority.HIGH)
                 .handler { e ->
                     if (e.isCancelled) return@handler
-                    if (TeleportUtil.hasTPTask(e.player)) {
-                        TeleportUtil.clearTPTask(e.player);
-                        e.player.sendRichMessage("<red>Teleport was cancelled!");
+                    if (!e.hasChangedBlock()) {
+                        return@handler
                     }
-                }
+                    if (TeleportUtil.hasTPTask(e.player)) {
+                        TeleportUtil.clearTPTask(e.player)
+                    }
+                })
 
-            Events.subscribe(EntityDamageEvent::class.java, EventPriority.HIGH)
+            plugin.bind(Events.subscribe(EntityDamageEvent::class.java, EventPriority.HIGH)
                 .handler { e ->
                     if (e.isCancelled) return@handler
                     if (e.entity !is Player) return@handler
                     if (TeleportUtil.hasTPTask(e.entity as Player)) {
-                        TeleportUtil.clearTPTask(e.entity as Player);
-                        (e.entity as Player).sendRichMessage("<red>Teleport was cancelled!");
+                        TeleportUtil.clearTPTask(e.entity as Player)
                     }
-                }
+                })
+
+            plugin.bind(Events.subscribe(PlayerQuitEvent::class.java, EventPriority.HIGH)
+                .handler { e ->
+                    if (TeleportUtil.hasTPTask(e.player)) {
+                        TeleportUtil.clearTPTask(e.player, false)
+                    }
+                })
         }
     }
 }
